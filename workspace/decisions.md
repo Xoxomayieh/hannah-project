@@ -161,3 +161,70 @@
 - **Not done / deferred**: server-side PDF upload to Supabase Storage (client-side jsPDF export is the
   path now, so `export_logs_pdf` tool degrades gracefully); deploy.
 
+## Session 2026-07-07 — Rig AI rework: reliable tool-calling + web knowledge (VERIFIED LIVE)
+- **User-reported bug**: "Plan Dallas to Chicago, pickup Tulsa, 22 hrs cycle" got a chatty
+  "Copy that, driver…" reply but **nothing planned** (no confirm card, no map/logs). Also general
+  chat "spouts random things", and the AI only knew the PDF.
+- **Root causes found (three, all in the assistant path):**
+  1. **Brittle router** (`router_node`, flash-lite → JSON `{"intent"}`, last message only): any parse
+     hiccup fell back to `"chat"` → trip requests were sent to an **un-grounded free-chat node**
+     (`direct_response_node`) → never planned, and hallucinated ("random things").
+  2. **"Narrate instead of act"**: the agent prompt literally said *"Always explain what you are doing
+     before you call a tool"* → Gemini emitted **text only, no tool call** → `route_tools`→END.
+  3. **Dead interrupt handling**: even when `plan_trip` WAS called, langgraph **1.2.7** does NOT raise
+     `GraphInterrupt` out of `.stream()`. It emits the interrupt as a **`"__interrupt__"` update**
+     (a tuple of `Interrupt` objects). The old `except GraphInterrupt` in `views.py` was dead code, so
+     `needs_confirmation` was never set → confirm card never showed.
+- **Decision — collapse to ONE tool-calling agent** (removed `router_node`, `retriever_node`,
+  `direct_response_node`, the per-doc RAG grader, and the `model_lite`/router model entirely).
+  `graph.py` is now just `agent → route_tools → execute_tools → agent`. Tools are **always bound**, so
+  intent is decided by the model with tools in hand — no fragile pre-classifier to drop requests.
+- **RAG is now a tool** (`search_hos_docs` in `tools.py`, wraps `rag.search_documents`). PDF/FAQ remains
+  **source of truth #1**: the system prompt forces `search_hos_docs` FIRST for any HOS/app question and
+  answers only from returned chunks with `[Page X]`/`[App FAQ]` citations.
+- **Web knowledge added** (`web_search` tool) via **Gemini's built-in Google Search grounding**
+  (`google-genai` `types.Tool(google_search=types.GoogleSearch())`) — **no new API key** (reuses
+  `GEMINI_API_KEY`). Used only for live/outside-the-guide info (fuel prices, weather, closures, recent
+  changes); prompt requires the agent to say when an answer is "from the web". Grounding source URLs
+  become citations. (User chose this over Tavily/DuckDuckGo.)
+- **Prompt rewrite**: removed "explain before calling"; now "the MOMENT you have all 4 trip params, call
+  `plan_trip` immediately; never claim a plan/log/PDF without a successful tool result; don't invent."
+- **HITL confirm kept** (user chose "show confirm card first"). Fix: `views.py` now reads the
+  **`"__interrupt__"`** stream update (tuple, previously skipped by the `isinstance(updates, dict)` guard)
+  to populate `needs_confirmation`. Confirm-resume path (`update_state(confirmed_trip=True)` + `stream(None)`)
+  unchanged and verified.
+- **Citations plumbing**: citations now ride on `search_hos_docs`/`web_search` tool results (parsed +
+  deduped in `views.py`), not the deleted retriever node. `ChatDock.tsx` citation chips now render web
+  sources as **clickable links** (hostname/title), FMCSA as `FMCSA p.X`, else `App FAQ`.
+- **VERIFIED LIVE** (real Gemini + Supabase, in-memory checkpointer so prod Postgres untouched):
+  (1) trip request → `plan_trip` called, params extracted (Dallas TX/Tulsa OK/Chicago IL/22), confirm
+  raised; (2) confirm → planned `trip_id 14`, `status success`, RENDER_TRIP; (3) "14-hour rule" →
+  `search_hos_docs` + real FMCSA citations; (4) "diesel price in TX" → `web_search`, "$4.208/gal … from
+  the web, verify at the pump". `manage.py check` clean; `npm run build` green.
+- **Note**: live verification created a few **test Trip rows in Supabase** (e.g. `trip_id 14`) — harmless
+  test data, can be deleted.
+- **Deps**: no new packages — `google-genai==2.10.0` was already installed.
+
+
+## Session 2026-07-07 — Location autocomplete reliability fix
+- **Problem**: "Plan a haul" location fields suggested places only intermittently.
+- **Root causes**: (1) every keystroke round-tripped through the Django serverless
+  backend on Vercel → cold-start/downtime = silent empty dropdown; (2) the public
+  `photon.komoot.io` instance intermittently timed out and the error was swallowed;
+  (3) no US ranking bias.
+- **Decision — call Photon directly from the browser** (`suggestLocations` in
+  `frontend/src/lib/api.ts`). Photon sends `Access-Control-Allow-Origin: *` (verified),
+  so no backend hop. Falls back to the Django `/api/trips/suggest/` endpoint only if the
+  direct call throws (non-abort). Removes the main flakiness source; lower latency.
+- **Decision — NO lat/lon coordinate bias.** Tested center-of-US bias: it *degraded*
+  results (surfaced tiny Kansas streets/streams/cemeteries and foreign villages above
+  real cities). Photon's default importance ranking is far better. Instead added a
+  **stable US-first re-rank** (`countrycode == 'US'` partitioned to the top, Photon order
+  preserved within groups) so foreign villages can't outrank US cities. Over-fetch
+  `limit*2` (min 8) then dedupe on label down to the requested count.
+- **Label fix**: `_photon_label` (Python) / `photonLabel` (TS) no longer append the
+  **county** to place features — a city result now reads "Chicago, IL" not
+  "Chicago, Cook County, IL". County is only a last-resort locality for street addresses.
+  Both implementations kept in sync (frontend is the primary path, backend is the fallback).
+- **Backend hardening**: `geocode_suggest` retries once on transient failure (0.3s backoff),
+  6s timeout, dedupes on label. No new deps; no API key (kept the free/keyless setup per user).

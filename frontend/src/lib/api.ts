@@ -74,11 +74,106 @@ export type LocationSuggestion = {
   lng: number;
 };
 
-export async function suggestLocations(
+// US state name -> USPS abbreviation, for building "City, ST" labels.
+const US_STATES: Record<string, string> = {
+  Alabama: "AL", Alaska: "AK", Arizona: "AZ", Arkansas: "AR", California: "CA",
+  Colorado: "CO", Connecticut: "CT", Delaware: "DE", Florida: "FL", Georgia: "GA",
+  Hawaii: "HI", Idaho: "ID", Illinois: "IL", Indiana: "IN", Iowa: "IA",
+  Kansas: "KS", Kentucky: "KY", Louisiana: "LA", Maine: "ME", Maryland: "MD",
+  Massachusetts: "MA", Michigan: "MI", Minnesota: "MN", Mississippi: "MS",
+  Missouri: "MO", Montana: "MT", Nebraska: "NE", Nevada: "NV",
+  "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+  "North Carolina": "NC", "North Dakota": "ND", Ohio: "OH", Oklahoma: "OK",
+  Oregon: "OR", Pennsylvania: "PA", "Rhode Island": "RI", "South Carolina": "SC",
+  "South Dakota": "SD", Tennessee: "TN", Texas: "TX", Utah: "UT", Vermont: "VT",
+  Virginia: "VA", Washington: "WA", "West Virginia": "WV", Wisconsin: "WI",
+  Wyoming: "WY", "District of Columbia": "DC",
+};
+
+type PhotonProps = {
+  name?: string;
+  housenumber?: string;
+  street?: string;
+  city?: string;
+  town?: string;
+  village?: string;
+  county?: string;
+  state?: string;
+  country?: string;
+  countrycode?: string;
+};
+
+// Build a human-readable "Street, City, ST" label from a Photon feature.
+// Mirrors backend core/services.py `_photon_label` so both paths match.
+function photonLabel(props: PhotonProps): string {
+  const { housenumber, street, name, state, country } = props;
+  // Enclosing city/town for an address. County is only a last resort and is
+  // NOT used for place features (a city result shouldn't read "Chicago, Cook County").
+  const city = props.city || props.town || props.village;
+  const stateAbbr = state ? US_STATES[state] ?? state : undefined;
+
+  let primary: string | undefined;
+  let locality: string | undefined;
+  if (housenumber && street) {
+    primary = `${housenumber} ${street}`;
+    locality = city || props.county;
+  } else if (street) {
+    primary = street;
+    locality = city || props.county;
+  } else {
+    // The feature IS a place (city/town/village/POI): its name stands alone.
+    primary = name;
+    locality = city && city !== name ? city : undefined;
+  }
+
+  const tail = stateAbbr || (country && country !== "United States" ? country : undefined);
+  let parts = [primary, locality, tail].filter(Boolean) as string[];
+  if (parts.length === 0) parts = [name, country].filter(Boolean) as string[];
+
+  const seen = new Set<string>();
+  return parts.filter((p) => (seen.has(p) ? false : (seen.add(p), true))).join(", ");
+}
+
+async function suggestFromPhoton(
   query: string,
   signal?: AbortSignal
 ): Promise<LocationSuggestion[]> {
-  if (query.trim().length < 2) return [];
+  // No lat/lon bias: Photon's default importance ranking surfaces prominent
+  // cities (Chicago, Dallas) far better than a coordinate bias, which drags in
+  // tiny nearby streets/streams. We instead keep US results ahead of foreign
+  // ones with a stable re-rank below.
+  const url =
+    `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=8&lang=en`;
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`photon ${res.status}`);
+  const data = await res.json();
+
+  // Stable-partition US results first, preserving Photon's order within each
+  // group, so e.g. "Springs, ZA" can't outrank "Spring, TX".
+  const feats = [...(data.features ?? [])].sort((a, b) => {
+    const aus = a.properties?.countrycode === "US" ? 0 : 1;
+    const bus = b.properties?.countrycode === "US" ? 0 : 1;
+    return aus - bus;
+  });
+
+  const out: LocationSuggestion[] = [];
+  const seen = new Set<string>();
+  for (const f of feats) {
+    const label = photonLabel(f.properties ?? {});
+    const [lng, lat] = f.geometry?.coordinates ?? [];
+    if (label && !seen.has(label) && typeof lat === "number") {
+      seen.add(label);
+      out.push({ label, lat, lng });
+      if (out.length >= 6) break;
+    }
+  }
+  return out;
+}
+
+async function suggestFromBackend(
+  query: string,
+  signal?: AbortSignal
+): Promise<LocationSuggestion[]> {
   const res = await fetch(
     `${API_URL}/api/trips/suggest/?q=${encodeURIComponent(query)}`,
     { signal }
@@ -86,6 +181,26 @@ export async function suggestLocations(
   if (!res.ok) return [];
   const data = await res.json();
   return data.results ?? [];
+}
+
+/**
+ * Location autocomplete. Queries the Photon geocoder directly from the browser
+ * (no backend cold-start hop, US-biased ranking). Falls back to our own Django
+ * endpoint if the direct call fails for any reason other than an abort.
+ */
+export async function suggestLocations(
+  query: string,
+  signal?: AbortSignal
+): Promise<LocationSuggestion[]> {
+  if (query.trim().length < 2) return [];
+  try {
+    return await suggestFromPhoton(query, signal);
+  } catch (err) {
+    if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+      throw err; // superseded by a newer keystroke — let the caller ignore it
+    }
+    return suggestFromBackend(query, signal);
+  }
 }
 
 export async function planTrip(input: TripInput): Promise<TripPlan> {

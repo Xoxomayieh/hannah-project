@@ -124,11 +124,32 @@ def chat_view(request):
     citations = []
     ui_actions = []
     needs_confirmation = None
+    _seen_citations = set()
+
+    def _add_citations(items):
+        for c in items or []:
+            key = (c.get("source"), c.get("page_range"), c.get("title"))
+            if key in _seen_citations:
+                continue
+            _seen_citations.add(key)
+            citations.append(c)
 
     try:
         # Run the graph to completion, aggregating node updates into one response.
         for chunk in graph.stream(inputs, config, stream_mode="updates"):
             for node_name, updates in chunk.items():
+                # Human-in-the-loop: langgraph emits the trip-confirm interrupt as a
+                # special "__interrupt__" update (a tuple of Interrupt objects), not a
+                # raised exception. Capture it so the UI can show the confirm card.
+                if node_name == "__interrupt__":
+                    for it in updates:
+                        try:
+                            payload = json.loads(it.value)
+                        except Exception:
+                            continue
+                        if payload.get("type") == "TRIP_CONFIRMATION_REQUIRED":
+                            needs_confirmation = payload.get("payload")
+                    continue
                 if not isinstance(updates, dict):
                     continue
                 for msg in updates.get("messages", []):
@@ -136,11 +157,14 @@ def chat_view(request):
                         action = _tool_ui_action(msg)
                         if action:
                             ui_actions.append(action)
+                        # Citations now ride on the search tool results.
+                        if msg.name in ("search_hos_docs", "web_search"):
+                            try:
+                                tdata = json.loads(msg.content)
+                                _add_citations(tdata.get("citations"))
+                            except Exception:
+                                pass
                     elif isinstance(msg, AIMessage):
-                        if node_name == "retriever":
-                            c = msg.additional_kwargs.get("citations", [])
-                            if c:
-                                citations = c
                         if msg.content:
                             if isinstance(msg.content, list):
                                 text_parts = []

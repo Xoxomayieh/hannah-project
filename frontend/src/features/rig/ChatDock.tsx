@@ -252,19 +252,37 @@ export const ChatDock: React.FC = () => {
                 {m.citations && m.citations.length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-1.5 max-w-[85%]">
                     {m.citations.map((c, i) => {
-                      const citationLabel = c.source === "fmcsa-hos-guide" 
-                        ? `FMCSA p. ${c.page_range}` 
-                        : "App FAQ";
-                      return (
-                        <div
+                      const isWeb = typeof c.source === "string" && /^https?:\/\//.test(c.source);
+                      let host = "";
+                      if (isWeb) {
+                        try { host = new URL(c.source).hostname.replace(/^www\./, ""); } catch { host = c.source; }
+                      }
+                      const citationLabel = c.source === "fmcsa-hos-guide"
+                        ? `FMCSA p. ${c.page_range}`
+                        : isWeb
+                          ? (c.title?.slice(0, 28) || host)
+                          : "App FAQ";
+                      const chipClass = "group relative rounded-full border border-hairline bg-void/50 px-2 py-0.5 font-mono text-[0.65rem] text-green hover:border-green/50 transition-colors";
+                      const inner = (
+                        <span className="flex items-center gap-1">
+                          {isWeb ? <Compass size={10} /> : <FileText size={10} />}
+                          {citationLabel}
+                        </span>
+                      );
+                      return isWeb ? (
+                        <a
                           key={i}
-                          className="group relative cursor-help rounded-full border border-hairline bg-void/50 px-2 py-0.5 font-mono text-[0.65rem] text-green hover:border-green/50 transition-colors"
-                          title={c.snippet}
+                          href={c.source}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={chipClass + " cursor-pointer"}
+                          title={c.title || c.source}
                         >
-                          <span className="flex items-center gap-1">
-                            <FileText size={10} />
-                            {citationLabel}
-                          </span>
+                          {inner}
+                        </a>
+                      ) : (
+                        <div key={i} className={chipClass + " cursor-help"} title={c.snippet}>
+                          {inner}
                         </div>
                       );
                     })}

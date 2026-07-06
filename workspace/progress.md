@@ -82,6 +82,62 @@
 - **Verified**: `manage.py check` clean, `npm run build` green, view smoke test (405/400/503/429 all
   correct). Full AI path needs live Gemini + Supabase + `ingest_docs` (untestable offline).
 
+## Vercel "works on my laptop only" bug — FIXED (2026-07-07)
+- **Root cause**: `frontend/src/features/rig/chatService.ts` hardcoded the backend URL
+  fallback to `http://127.0.0.1:8000` **without** the `import.meta.env.PROD ? ""` guard
+  that `lib/api.ts` has. Vite inlines env at build time, so the deployed chatbot called
+  `127.0.0.1:8000` = the *visitor's own* machine. Worked only on the dev laptop (Django
+  running locally); "connection refused" everywhere else → chatbot dead.
+- **Fix**: chatService now uses `VITE_API_URL || (PROD ? "" : localhost)` (relative URLs
+  in prod, proxied to Django via vercel.json `/api/(.*)` route).
+- **Also flagged (user must verify)**: if `VITE_API_URL` is set to localhost/127.0.0.1 in
+  the **Vercel dashboard** env vars, it overrides the code and breaks plan/search too —
+  must be deleted. `frontend/.env` itself is gitignored, so it does NOT reach Vercel.
+- **Background animation** on other laptops: NOT a hard bug — 180 hero frames are all
+  committed/deployed. Skipped only when OS "Reduce motion" is ON (`prefersReducedMotion()`,
+  by design) or on weak hardware/slow network. Confirm via DevTools on the other machine.
+
+## Rig AI rework — reliable planning + web knowledge (2026-07-07) — DONE, VERIFIED LIVE
+- **Fixed the "chatbot replies but nothing plans" bug + hallucination + no web data.**
+- **Rewrote `assistant/graph.py`** into ONE tool-calling agent (`agent → route_tools → execute_tools`).
+  Deleted the brittle `router_node` / `retriever_node` / `direct_response_node` / RAG-grader / flash-lite
+  router that were dropping trip requests into un-grounded chat. All tools always bound.
+- **New tools in `assistant/tools.py`**:
+  - `search_hos_docs` — PDF/FAQ RAG as a tool (source of truth #1; forced FIRST for HOS questions; cited).
+  - `web_search` — Gemini **Google Search grounding** (no new key), for live/outside-the-guide info,
+    labeled "from the web".
+- **Prompt**: forces `plan_trip` the moment all 4 params exist; forbids claiming actions without a
+  successful tool result; forbids inventing rules/numbers.
+- **`assistant/views.py`**: reads the langgraph-1.2.7 **`"__interrupt__"` stream update** (the old
+  `except GraphInterrupt` was dead) so the ConfirmTripCard shows again; citations now parsed from the
+  search tool results (deduped).
+- **`ChatDock.tsx`**: citation chips render web sources as clickable links.
+- **Verified live** (real Gemini+Supabase): plan→confirm→render works; HOS Qs cite FMCSA pages; live Qs
+  hit the web. `manage.py check` clean; `npm run build` green.
+- **Operational reminder**: web/PDF answers require `ingest_docs` to have been run and
+  `GEMINI_API_KEY`/`DATABASE_URL` set (they are, locally). If deployed, set the same env on Vercel.
+
+## Location autocomplete reliability — FIXED (2026-07-07)
+- **Symptom**: "Plan a haul" location fields suggested places only *sometimes*.
+- **Cause**: keystrokes round-tripped through the Vercel/Django serverless backend
+  (cold-start = silent empty dropdown) to the flaky public Photon instance; errors were
+  swallowed; no US ranking bias.
+- **Fix**:
+  - `frontend/src/lib/api.ts` — `suggestLocations` now calls `photon.komoot.io` **directly
+    from the browser** (CORS `*` verified), no backend hop; falls back to the Django
+    `/api/trips/suggest/` endpoint only on a non-abort failure. Ported the label builder
+    (`photonLabel`) + US state map to TS.
+  - **No coordinate bias** (tested — it made ranking worse: tiny nearby streets/streams
+    beat real cities). Instead a **stable US-first re-rank** keeps US cities ahead of
+    foreign villages; over-fetch + dedupe on label.
+  - `backend/core/services.py` — `geocode_suggest` hardened (retry once, 6s timeout,
+    US-first re-rank, dedupe); `_photon_label` no longer appends county to place features
+    ("Chicago, IL" not "Chicago, Cook County, IL").
+  - No new deps, no API key (kept keyless per user). `tsc --noEmit` green; services.py parses.
+- **Verify still open**: exercise live in the browser (type into the 3 fields; confirm the
+  dropdown appears consistently and picking a suggestion fills the field). The direct-Photon
+  path is testable without the backend running.
+
 ## In Progress
 - Nothing actively coding.
 

@@ -6,12 +6,32 @@ from trips.models import Trip, DutyEvent
 from core.services import geocode
 from supabase import create_client, Client
 
+from .rag import search_documents
+
 # Initialize Supabase client
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = None
 if supabase_url and supabase_key:
     supabase = create_client(supabase_url, supabase_key)
+
+# Lazy Gemini (google-genai) client for web-search grounding. Reuses the same
+# GEMINI_API_KEY — no extra provider/key required.
+_genai_client = None
+
+
+def _get_genai_client():
+    global _genai_client
+    if _genai_client is None:
+        key = os.environ.get("GEMINI_API_KEY")
+        if not key:
+            return None
+        try:
+            from google import genai
+            _genai_client = genai.Client(api_key=key)
+        except Exception:
+            return None
+    return _genai_client
 
 @tool
 def plan_trip(current_location: str, pickup_location: str, dropoff_location: str, cycle_used_hrs: float) -> str:
@@ -191,3 +211,117 @@ def hos_quick_calc(cycle_used_hrs: float, drive_today_hrs: float = 0.0, hours_si
             f"{break_remain:.2f} hours. You have {cycle_remain:.2f} hours remaining on your 70-hour cycle."
         )
     })
+
+
+@tool
+def search_hos_docs(query: str) -> str:
+    """
+    Search the FMCSA Hours-of-Service guide and the HAULR app FAQ. This is the
+    PRIMARY SOURCE OF TRUTH and MUST be consulted first for any question about
+    HOS rules, driving/on-duty limits, breaks, the 70-hour cycle, 34-hour restart,
+    daily log requirements, or how to use the HAULR application.
+
+    Returns passages with page/source metadata so you can cite them as [Page X]
+    or [App FAQ]. Answer ONLY from the returned chunks; do not invent rules.
+
+    Args:
+        query: A focused natural-language question about HOS rules or the app.
+    """
+    try:
+        docs = search_documents(query)
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e), "chunks": [], "citations": []})
+
+    if not docs:
+        return json.dumps({
+            "status": "empty",
+            "message": "No matching passages found in the FMCSA guide or app FAQ.",
+            "chunks": [],
+            "citations": [],
+        })
+
+    chunks = []
+    citations = []
+    for d in docs:
+        src = d.metadata.get("source", "fmcsa-hos-guide")
+        page_range = d.metadata.get("page_range", "N/A")
+        title = d.metadata.get("title", "")
+        chunks.append({
+            "source": src,
+            "page_range": page_range,
+            "title": title,
+            "content": d.page_content,
+        })
+        citations.append({
+            "source": src,
+            "page_range": page_range,
+            "title": title,
+            "snippet": d.page_content[:200] + "...",
+        })
+
+    return json.dumps({"status": "success", "chunks": chunks, "citations": citations})
+
+
+@tool
+def web_search(query: str) -> str:
+    """
+    Search the live public web for current, real-world info that is NOT in the
+    FMCSA guide — e.g. current fuel/diesel prices, weather, road/weigh-station
+    closures, state-specific idling or chain laws, recent regulation changes, or
+    general trucking questions the guide doesn't cover.
+
+    IMPORTANT: The FMCSA guide (search_hos_docs) is the source of truth for HOS
+    rules — only use web_search for things outside it, or to fill a gap after
+    search_hos_docs returned nothing. Always tell the driver when an answer comes
+    from the web rather than the official guide.
+
+    Args:
+        query: A focused, self-contained web search question.
+    """
+    client = _get_genai_client()
+    if not client:
+        return json.dumps({"status": "error", "message": "Web search is unavailable right now.", "citations": []})
+
+    try:
+        from google.genai import types
+        model = os.environ.get("GEMINI_CHAT_MODEL", "gemini-2.5-flash").replace("models/", "")
+        resp = client.models.generate_content(
+            model=model,
+            contents=(
+                "You are helping a truck driver. Answer this concisely and factually "
+                f"using up-to-date web results. Question: {query}"
+            ),
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0.2,
+            ),
+        )
+
+        text = (getattr(resp, "text", None) or "").strip()
+
+        citations = []
+        seen = set()
+        candidates = getattr(resp, "candidates", None) or []
+        if candidates:
+            gm = getattr(candidates[0], "grounding_metadata", None)
+            for ch in (getattr(gm, "grounding_chunks", None) or []):
+                web = getattr(ch, "web", None)
+                if not web:
+                    continue
+                uri = getattr(web, "uri", None)
+                if not uri or uri in seen:
+                    continue
+                seen.add(uri)
+                citations.append({
+                    "source": uri,
+                    "page_range": "web",
+                    "title": getattr(web, "title", "") or uri,
+                    "snippet": getattr(web, "title", "") or uri,
+                })
+
+        if not text:
+            return json.dumps({"status": "empty", "message": "No useful web results found.", "citations": []})
+
+        return json.dumps({"status": "success", "answer": text, "citations": citations})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e), "citations": []})
