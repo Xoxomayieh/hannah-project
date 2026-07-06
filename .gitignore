@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+*.mp4
+*.mkv
+*.avi
+*.mov
+.venv/
+__pycache__/
+*.pyc
+.agents/
+.claude/
+.DS_Store

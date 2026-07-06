@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Solid background for app icon use, or rounded rect -->
+  <rect width="512" height="512" rx="112" fill="#000000" />
+  
+  <defs>
+    <linearGradient id="greenGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4ADE80" />
+      <stop offset="100%" stop-color="#22C55E" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="16" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <g transform="translate(20, 0)">
+    <!-- Left Pillar -->
+    <rect x="110" y="140" width="72" height="232" rx="12" fill="#FFFFFF" />
+    
+    <!-- Middle Crossbar -->
+    <rect x="182" y="220" width="80" height="72" fill="#FFFFFF" />
+    
+    <!-- Right Pillar (Truck Cab shape) moving forward -->
+    <path d="M262 152 C262 145.373 267.373 140 274 140 H334 C340.627 140 346 145.373 346 152 V220 L382 256 V360 C382 366.627 376.627 372 370 372 H274 C267.373 372 262 366.627 262 360 V152 Z" fill="url(#greenGlow)" filter="url(#glow)"/>
+    
+    <!-- Telemetry Dot / Radar pulse -->
+    <circle cx="382" cy="130" r="14" fill="#22C55E" filter="url(#glow)" />
+  </g>
+</svg>

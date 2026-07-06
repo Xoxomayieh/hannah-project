@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" fill="none">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@800&amp;display=swap');
+    .font-brand { 
+      font-family: 'Inter', sans-serif; 
+      font-weight: 800; 
+      font-size: 80px; 
+      letter-spacing: -0.05em; 
+    }
+  </style>
+  <text x="20" y="90" class="font-brand">
+    <tspan fill="#FFFFFF">HAUL</tspan><tspan fill="#22C55E">R</tspan>
+  </text>
+  <!-- Telemetry pulse / dot -->
+  <circle cx="340" cy="28" r="8" fill="#22C55E">
+    <animate attributeName="opacity" values="1; 0.3; 1" dur="2.5s" repeatCount="indefinite"/>
+    <animate attributeName="r" values="8; 9; 8" dur="2.5s" repeatCount="indefinite"/>
+  </circle>
+</svg>

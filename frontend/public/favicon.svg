@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Transparent background for favicon -->
+  <rect x="10" y="14" width="14" height="36" rx="4" fill="#FFFFFF" />
+  <rect x="24" y="26" width="12" height="12" fill="#FFFFFF" />
+  <path d="M36 18 C36 15.79 37.79 14 40 14 H48 C50.21 14 52 15.79 52 18 V26 L58 32 V46 C58 48.21 56.21 50 54 50 H40 C37.79 50 36 48.21 36 46 V18 Z" fill="#22C55E" />
+  <circle cx="58" cy="14" r="4" fill="#22C55E" />
+</svg>
