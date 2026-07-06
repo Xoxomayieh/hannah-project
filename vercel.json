@@ -1,7 +1,5 @@
 {
   "version": 2,
-  "buildCommand": "./build.sh",
-  "outputDirectory": "frontend/dist",
   "builds": [
     {
       "src": "backend/haulr/wsgi.py",
@@ -13,28 +11,28 @@
     },
     {
       "src": "frontend/package.json",
-      "use": "@vercel/static-build"
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "/backend/haulr/wsgi.py"
+      "source": "/api/(.*)",
+      "destination": "/backend/haulr/wsgi.py"
     },
     {
-      "src": "/admin/(.*)",
-      "dest": "/backend/haulr/wsgi.py"
+      "source": "/admin/(.*)",
+      "destination": "/backend/haulr/wsgi.py"
     },
     {
-      "src": "/static/(.*)",
-      "dest": "/backend/haulr/wsgi.py"
+      "source": "/static/(.*)",
+      "destination": "/backend/haulr/wsgi.py"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
