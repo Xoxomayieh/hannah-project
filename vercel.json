@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "buildCommand": "./build.sh",
+  "outputDirectory": "frontend/dist",
+  "builds": [
+    {
+      "src": "backend/haulr/wsgi.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "15mb",
+        "runtime": "python3.12"
+      }
+    },
+    {
+      "src": "frontend/package.json",
+      "use": "@vercel/static-build"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/backend/haulr/wsgi.py"
+    },
+    {
+      "src": "/admin/(.*)",
+      "dest": "/backend/haulr/wsgi.py"
+    },
+    {
+      "src": "/static/(.*)",
+      "dest": "/backend/haulr/wsgi.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/frontend/dist/$1"
+    }
+  ]
+}
